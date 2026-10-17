@@ -181,6 +181,16 @@ button:focus-visible, select:focus-visible {
 .predict-button:hover { transform: translateY(-2px); filter: saturate(1.08); }
 .predict-button:active { transform: translateY(0); }
 .predict-button svg { width: 17px; height: 17px; }
+.predict-button:disabled { cursor: wait; filter: saturate(.8); transform: none; }
+.team-select:disabled { cursor: wait; opacity: .75; }
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(16, 36, 25, .25);
+  border-top-color: #102419;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
 .result-area { margin-top: 22px; animation: reveal .35s ease both; }
 .result-topline { display: flex; justify-content: space-between; align-items: center; margin-bottom: 13px; gap: 12px; }
 .result-title { font-size: 12px; font-weight: 800; }
@@ -213,6 +223,7 @@ button:focus-visible, select:focus-visible {
 .footer-note strong { color: var(--green); font-weight: 500; }
 @keyframes reveal { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes bar-in { from { transform: scaleX(.2); } to { transform: scaleX(1); } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 760px) {
   .topbar { height: 72px; padding: 0 20px; }

@@ -14,18 +14,48 @@ const clubs = [
   'Everton',
 ];
 
+// These made-up values only give the demo formula a way to compare teams.
+const demoTeamRatings = {
+  Arsenal: 8,
+  Liverpool: 9,
+  'Manchester City': 10,
+  Chelsea: 7,
+  'Manchester United': 7,
+  Tottenham: 7,
+  'Newcastle United': 8,
+  'Aston Villa': 7,
+  Brighton: 7,
+  Everton: 5,
+};
+
 const startingPredictions = [
   { home: 'Arsenal', away: 'Chelsea', values: [48, 27, 25], label: 'Home edge', time: 'DEMO EXAMPLE' },
   { home: 'Liverpool', away: 'Aston Villa', values: [55, 24, 21], label: 'Home edge', time: 'DEMO EXAMPLE' },
   { home: 'Everton', away: 'Tottenham', values: [29, 25, 46], label: 'Away edge', time: 'DEMO EXAMPLE' },
 ];
 
-function getProbabilities(home, away) {
-  const homeIndex = clubs.indexOf(home);
-  const awayIndex = clubs.indexOf(away);
-  const tilt = ((homeIndex * 13 + awayIndex * 7) % 19) - 9;
-  const homeWin = Math.max(22, Math.min(61, 42 + tilt));
-  const draw = 24 + ((homeIndex + awayIndex) % 8);
+function getProbabilities(home, away, previousValues) {
+  const ratingDifference = demoTeamRatings[home] - demoTeamRatings[away];
+  const homeVariation = Math.floor(Math.random() * 9) - 4;
+  const drawVariation = Math.floor(Math.random() * 5) - 2;
+
+  let homeWin = Math.max(
+    22,
+    Math.min(64, 47 + ratingDifference * 2 + homeVariation),
+  );
+  const draw = Math.max(
+    20,
+    Math.min(
+      34,
+      29 - Math.round(Math.abs(ratingDifference) * 0.6) + drawVariation,
+    ),
+  );
+
+  // Make sure a repeated click on the same matchup visibly refreshes the result.
+  if (previousValues && homeWin === previousValues[0] && draw === previousValues[1]) {
+    homeWin = homeWin < 64 ? homeWin + 1 : homeWin - 1;
+  }
+
   return [homeWin, draw, 100 - homeWin - draw];
 }
 
@@ -54,6 +84,7 @@ function MatchPredictor() {
   const [away, setAway] = useState('Liverpool');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
+  const [isPredicting, setIsPredicting] = useState(false);
   const [predictions, setPredictions] = useState(startingPredictions);
   const [theme, setTheme] = useState(() => {
     try {
@@ -74,16 +105,33 @@ function MatchPredictor() {
 
   function predictMatch(event) {
     event.preventDefault();
+    if (isPredicting) return;
+
     if (home === away) {
       setError('Choose two different clubs to compare.');
       setResult(null);
       return;
     }
+
     setError('');
-    const values = getProbabilities(home, away);
-    const prediction = { home, away, values, label: 'DEMO', time: `JUST NOW · ${formatTime()}` };
-    setResult(prediction);
-    setPredictions((current) => [prediction, ...current]);
+    const previousValues =
+      result?.home === home && result?.away === away ? result.values : null;
+    setResult(null);
+    setIsPredicting(true);
+
+    window.setTimeout(() => {
+      const values = getProbabilities(home, away, previousValues);
+      const prediction = {
+        home,
+        away,
+        values,
+        label: 'DEMO RESULT',
+        time: `JUST NOW · ${formatTime()}`,
+      };
+      setResult(prediction);
+      setPredictions((current) => [prediction, ...current]);
+      setIsPredicting(false);
+    }, 450);
   }
 
   return (
@@ -122,7 +170,11 @@ function MatchPredictor() {
               <span className="demo-chip">Demo only</span>
             </div>
 
-            <form onSubmit={predictMatch} data-testid="form-predict-match">
+            <form
+              onSubmit={predictMatch}
+              data-testid="form-predict-match"
+              aria-busy={isPredicting}
+            >
               <div className="matchup">
                 <div>
                   <label className="field-label" htmlFor="home-club">Home team</label>
@@ -131,10 +183,23 @@ function MatchPredictor() {
                       id="home-club"
                       className="team-select"
                       value={home}
-                      onChange={(event) => { setHome(event.target.value); setError(''); }}
+                      disabled={isPredicting}
+                      onChange={(event) => {
+                        const selectedHome = event.target.value;
+                        if (selectedHome === away) {
+                          setError('Choose two different clubs to compare.');
+                          return;
+                        }
+                        setHome(selectedHome);
+                        setError('');
+                      }}
                       data-testid="select-home-team"
                     >
-                      {clubs.map((club) => <option key={club} value={club}>{club}</option>)}
+                      {clubs.map((club) => (
+                        <option key={club} value={club} disabled={club === away}>
+                          {club}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -146,17 +211,45 @@ function MatchPredictor() {
                       id="away-club"
                       className="team-select"
                       value={away}
-                      onChange={(event) => { setAway(event.target.value); setError(''); }}
+                      disabled={isPredicting}
+                      onChange={(event) => {
+                        const selectedAway = event.target.value;
+                        if (selectedAway === home) {
+                          setError('Choose two different clubs to compare.');
+                          return;
+                        }
+                        setAway(selectedAway);
+                        setError('');
+                      }}
                       data-testid="select-away-team"
                     >
-                      {clubs.map((club) => <option key={club} value={club}>{club}</option>)}
+                      {clubs.map((club) => (
+                        <option key={club} value={club} disabled={club === home}>
+                          {club}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
               </div>
               {error && <p className="form-error" role="alert" data-testid="status-validation-error">{error}</p>}
-              <button className="predict-button" type="submit" data-testid="button-predict-match">
-                <Trophy aria-hidden="true" /> Predict match <ArrowRight aria-hidden="true" />
+              <button
+                className="predict-button"
+                type="submit"
+                disabled={isPredicting}
+                aria-live="polite"
+                data-testid="button-predict-match"
+              >
+                {isPredicting ? (
+                  <>
+                    <span className="loading-spinner" aria-hidden="true" />
+                    Generating demo…
+                  </>
+                ) : (
+                  <>
+                    <Trophy aria-hidden="true" /> Predict match <ArrowRight aria-hidden="true" />
+                  </>
+                )}
               </button>
             </form>
 
@@ -177,7 +270,7 @@ function MatchPredictor() {
                     </div>
                   ))}
                 </div>
-                <p className="result-note">Illustrative percentages only. This demo uses a simple deterministic formula, not a trained model or live football data.</p>
+                <p className="result-note">Illustrative percentages only. Each click uses a simple demo formula with small variation, not a trained model or live football data.</p>
               </section>
             )}
           </section>
