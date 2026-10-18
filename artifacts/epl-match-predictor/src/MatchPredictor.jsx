@@ -2,9 +2,57 @@ import { useEffect, useState } from 'react';
 import { Activity, ArrowRight, Moon, Sun, Trophy } from 'lucide-react';
 
 const API_BASE_URL = 'https://epl2-match-predictor-api-1.onrender.com';
+const PREDICTIONS_STORAGE_KEY = 'epl-predictor-recent-predictions';
+const MAX_PREDICTIONS = 7;
 
 function formatTime() {
   return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(new Date());
+}
+
+function isStoredPrediction(value) {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && typeof value.home === 'string'
+    && value.home.trim().length > 0
+    && value.home.length <= 100
+    && typeof value.away === 'string'
+    && value.away.trim().length > 0
+    && value.away.length <= 100
+    && Array.isArray(value.values)
+    && value.values.length === 3
+    && value.values.every((probability) => typeof probability === 'number'
+      && Number.isFinite(probability) && probability >= 0 && probability <= 100)
+    && (value.season === undefined
+      || (typeof value.season === 'string' && value.season.length <= 32))
+    && value.label === 'ESTIMATE'
+    && typeof value.time === 'string'
+    && value.time.trim().length > 0
+    && value.time.length <= 64;
+}
+
+function loadStoredPredictions() {
+  try {
+    const stored = localStorage.getItem(PREDICTIONS_STORAGE_KEY);
+    if (stored === null) return [];
+
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter(isStoredPrediction)
+      .slice(0, MAX_PREDICTIONS)
+      .map(({ home, away, values, season, label, time }) => ({
+        home,
+        away,
+        values,
+        season,
+        label,
+        time,
+      }));
+  } catch {
+    return [];
+  }
 }
 
 function formatSeason(season) {
@@ -52,7 +100,7 @@ function MatchPredictor() {
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [isPredicting, setIsPredicting] = useState(false);
-  const [predictions, setPredictions] = useState([]);
+  const [predictions, setPredictions] = useState(loadStoredPredictions);
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem('epl-predictor-theme') || 'dark';
@@ -69,6 +117,14 @@ function MatchPredictor() {
       // The interface still works when browser storage is unavailable.
     }
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PREDICTIONS_STORAGE_KEY, JSON.stringify(predictions));
+    } catch {
+      // The interface still works when browser storage is unavailable.
+    }
+  }, [predictions]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -152,7 +208,7 @@ function MatchPredictor() {
         time: `JUST NOW · ${formatTime()}`,
       };
       setResult(prediction);
-      setPredictions((current) => [prediction, ...current]);
+      setPredictions((current) => [prediction, ...current].slice(0, MAX_PREDICTIONS));
     } catch (predictionError) {
       setError(predictionError instanceof TypeError
         ? 'Unable to reach the prediction service. Check your connection and try again.'
