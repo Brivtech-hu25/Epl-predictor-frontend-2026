@@ -1,70 +1,34 @@
 import { useEffect, useState } from 'react';
 import { Activity, ArrowRight, Moon, Sun, Trophy } from 'lucide-react';
 
-const clubs = [
-  'Arsenal',
-  'Liverpool',
-  'Manchester City',
-  'Chelsea',
-  'Manchester United',
-  'Tottenham',
-  'Newcastle United',
-  'Aston Villa',
-  'Brighton',
-  'Everton',
-];
-
-// These made-up values only give the demo formula a way to compare teams.
-const demoTeamRatings = {
-  Arsenal: 8,
-  Liverpool: 9,
-  'Manchester City': 10,
-  Chelsea: 7,
-  'Manchester United': 7,
-  Tottenham: 7,
-  'Newcastle United': 8,
-  'Aston Villa': 7,
-  Brighton: 7,
-  Everton: 5,
-};
-
-const startingPredictions = [
-  { home: 'Arsenal', away: 'Chelsea', values: [48, 27, 25], label: 'Home edge', time: 'DEMO EXAMPLE' },
-  { home: 'Liverpool', away: 'Aston Villa', values: [55, 24, 21], label: 'Home edge', time: 'DEMO EXAMPLE' },
-  { home: 'Everton', away: 'Tottenham', values: [29, 25, 46], label: 'Away edge', time: 'DEMO EXAMPLE' },
-];
-
-function getProbabilities(home, away, previousValues) {
-  const ratingDifference = demoTeamRatings[home] - demoTeamRatings[away];
-  const homeVariation = Math.floor(Math.random() * 9) - 4;
-  const drawVariation = Math.floor(Math.random() * 5) - 2;
-
-  let homeWin = Math.max(
-    22,
-    Math.min(64, 47 + ratingDifference * 2 + homeVariation),
-  );
-  const draw = Math.max(
-    20,
-    Math.min(
-      34,
-      29 - Math.round(Math.abs(ratingDifference) * 0.6) + drawVariation,
-    ),
-  );
-
-  // Make sure a repeated click on the same matchup visibly refreshes the result.
-  if (previousValues && homeWin === previousValues[0] && draw === previousValues[1]) {
-    homeWin = homeWin < 64 ? homeWin + 1 : homeWin - 1;
-  }
-
-  return [homeWin, draw, 100 - homeWin - draw];
-}
+const API_BASE_URL = 'https://epl2-match-predictor-api-1.onrender.com';
 
 function formatTime() {
   return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(new Date());
 }
 
+function formatSeason(season) {
+  return typeof season === 'string' ? season.replace('-', '–') : '2023–24';
+}
+
+async function getApiErrorMessage(response, action) {
+  let detail = '';
+  try {
+    const body = await response.json();
+    detail = typeof body?.detail === 'string'
+      ? body.detail
+      : typeof body?.message === 'string'
+        ? body.message
+        : '';
+  } catch {
+    // Fall back to the HTTP status when the API response is not JSON.
+  }
+  return detail
+    ? `${action}: ${detail}`
+    : `${action} (HTTP ${response.status}). Please try again.`;
+}
+
 function PredictionCard({ prediction, index }) {
-  const labels = ['Home win', 'Draw', 'Away win'];
   return (
     <article className="recent-item" data-testid={`prediction-item-${index}`}>
       <div>
@@ -73,19 +37,22 @@ function PredictionCard({ prediction, index }) {
       </div>
       <div className="recent-outcome">
         <span className="recent-confidence">{prediction.values[0]} / {prediction.values[1]} / {prediction.values[2]}</span>
-        <span className="recent-tag" title={`${labels[0]} / ${labels[1]} / ${labels[2]}`}>{prediction.label}</span>
+        <span className="recent-tag" title="Home win / Draw / Away win">{prediction.label}</span>
       </div>
     </article>
   );
 }
 
 function MatchPredictor() {
-  const [home, setHome] = useState('Arsenal');
-  const [away, setAway] = useState('Liverpool');
+  const [teams, setTeams] = useState([]);
+  const [home, setHome] = useState('');
+  const [away, setAway] = useState('');
+  const [isLoadingTeams, setIsLoadingTeams] = useState(true);
+  const [teamError, setTeamError] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [isPredicting, setIsPredicting] = useState(false);
-  const [predictions, setPredictions] = useState(startingPredictions);
+  const [predictions, setPredictions] = useState([]);
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem('epl-predictor-theme') || 'dark';
@@ -103,9 +70,48 @@ function MatchPredictor() {
     }
   }, [theme]);
 
-  function predictMatch(event) {
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadTeams() {
+      setIsLoadingTeams(true);
+      setTeamError('');
+      try {
+        const response = await fetch(`${API_BASE_URL}/teams`, { signal: controller.signal });
+        if (!response.ok) {
+          throw new Error(await getApiErrorMessage(response, 'Unable to load teams'));
+        }
+        const data = await response.json();
+        if (!Array.isArray(data?.teams) || data.teams.length < 2
+          || !data.teams.every((team) => typeof team === 'string' && team.trim())) {
+          throw new Error('The teams service returned an invalid team list.');
+        }
+        setTeams(data.teams);
+        setHome(data.teams[0]);
+        setAway(data.teams[1]);
+      } catch (loadError) {
+        if (loadError.name !== 'AbortError') {
+          setTeams([]);
+          setTeamError(loadError instanceof TypeError
+            ? 'Unable to reach the teams service. Check your connection and refresh to try again.'
+            : loadError instanceof Error
+              ? loadError.message
+              : 'Unable to load teams. Please refresh the page and try again.');
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoadingTeams(false);
+        }
+      }
+    }
+
+    loadTeams();
+    return () => controller.abort();
+  }, []);
+
+  async function predictMatch(event) {
     event.preventDefault();
-    if (isPredicting) return;
+    if (isPredicting || isLoadingTeams || teamError || teams.length < 2) return;
 
     if (home === away) {
       setError('Choose two different clubs to compare.');
@@ -114,24 +120,48 @@ function MatchPredictor() {
     }
 
     setError('');
-    const previousValues =
-      result?.home === home && result?.away === away ? result.values : null;
     setResult(null);
     setIsPredicting(true);
-
-    window.setTimeout(() => {
-      const values = getProbabilities(home, away, previousValues);
+    try {
+      const response = await fetch(`${API_BASE_URL}/predict`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ home_team: home, away_team: away }),
+      });
+      if (!response.ok) {
+        throw new Error(await getApiErrorMessage(response, 'Unable to get a prediction'));
+      }
+      const data = await response.json();
+      const probabilities = data?.probabilities;
+      const values = [
+        probabilities?.home_win,
+        probabilities?.draw,
+        probabilities?.away_win,
+      ];
+      if (typeof data?.home_team !== 'string' || typeof data?.away_team !== 'string'
+        || !values.every((value) => typeof value === 'number' && Number.isFinite(value)
+          && value >= 0 && value <= 100)) {
+        throw new Error('The prediction service returned an invalid result. Please try again.');
+      }
       const prediction = {
-        home,
-        away,
+        home: data.home_team,
+        away: data.away_team,
         values,
-        label: 'DEMO RESULT',
+        season: data.historical_data_season,
+        label: 'ESTIMATE',
         time: `JUST NOW · ${formatTime()}`,
       };
       setResult(prediction);
       setPredictions((current) => [prediction, ...current]);
+    } catch (predictionError) {
+      setError(predictionError instanceof TypeError
+        ? 'Unable to reach the prediction service. Check your connection and try again.'
+        : predictionError instanceof Error
+          ? predictionError.message
+          : 'Unable to get a prediction. Check your connection and try again.');
+    } finally {
       setIsPredicting(false);
-    }, 450);
+    }
   }
 
   return (
@@ -157,7 +187,7 @@ function MatchPredictor() {
         <section className="intro" aria-labelledby="page-title">
           <div className="eyebrow">Matchday, your way</div>
           <h1 id="page-title">What if your<br /><span>club played?</span></h1>
-          <p>Explore a matchup, compare the possibilities, and make the fixture yours. Just a football sandbox — no stakes, no certainty.</p>
+          <p>Explore a matchup using historical 2023–24 Premier League data. Predictions are estimates, not guaranteed results.</p>
         </section>
 
         <div className="dashboard-grid">
@@ -167,13 +197,13 @@ function MatchPredictor() {
                 <h2 id="predict-title">Build a fixture</h2>
                 <p>Pick a home side and an away side to get started.</p>
               </div>
-              <span className="demo-chip">Demo only</span>
+              <span className="demo-chip">2023–24 data</span>
             </div>
 
             <form
               onSubmit={predictMatch}
               data-testid="form-predict-match"
-              aria-busy={isPredicting}
+              aria-busy={isPredicting || isLoadingTeams}
             >
               <div className="matchup">
                 <div>
@@ -183,7 +213,7 @@ function MatchPredictor() {
                       id="home-club"
                       className="team-select"
                       value={home}
-                      disabled={isPredicting}
+                      disabled={isPredicting || isLoadingTeams || teams.length === 0}
                       onChange={(event) => {
                         const selectedHome = event.target.value;
                         if (selectedHome === away) {
@@ -195,7 +225,9 @@ function MatchPredictor() {
                       }}
                       data-testid="select-home-team"
                     >
-                      {clubs.map((club) => (
+                      {isLoadingTeams && <option value="">Loading teams…</option>}
+                      {!isLoadingTeams && teams.length === 0 && <option value="">Teams unavailable</option>}
+                      {teams.map((club) => (
                         <option key={club} value={club} disabled={club === away}>
                           {club}
                         </option>
@@ -211,7 +243,7 @@ function MatchPredictor() {
                       id="away-club"
                       className="team-select"
                       value={away}
-                      disabled={isPredicting}
+                      disabled={isPredicting || isLoadingTeams || teams.length === 0}
                       onChange={(event) => {
                         const selectedAway = event.target.value;
                         if (selectedAway === home) {
@@ -223,7 +255,9 @@ function MatchPredictor() {
                       }}
                       data-testid="select-away-team"
                     >
-                      {clubs.map((club) => (
+                      {isLoadingTeams && <option value="">Loading teams…</option>}
+                      {!isLoadingTeams && teams.length === 0 && <option value="">Teams unavailable</option>}
+                      {teams.map((club) => (
                         <option key={club} value={club} disabled={club === home}>
                           {club}
                         </option>
@@ -232,22 +266,24 @@ function MatchPredictor() {
                   </div>
                 </div>
               </div>
-              {error && <p className="form-error" role="alert" data-testid="status-validation-error">{error}</p>}
+              {(error || teamError) && <p className="form-error" role="alert" data-testid="status-validation-error">{error || teamError}</p>}
               <button
                 className="predict-button"
                 type="submit"
-                disabled={isPredicting}
+                disabled={isPredicting || isLoadingTeams || teams.length < 2 || Boolean(teamError)}
                 aria-live="polite"
                 data-testid="button-predict-match"
               >
                 {isPredicting ? (
                   <>
                     <span className="loading-spinner" aria-hidden="true" />
-                    Generating demo…
+                    Getting prediction…
                   </>
                 ) : (
                   <>
-                    <Trophy aria-hidden="true" /> Predict match <ArrowRight aria-hidden="true" />
+                    <Trophy aria-hidden="true" />
+                    {isLoadingTeams ? 'Loading teams…' : teamError ? 'Teams unavailable' : 'Predict match'}
+                    <ArrowRight aria-hidden="true" />
                   </>
                 )}
               </button>
@@ -257,7 +293,7 @@ function MatchPredictor() {
               <section className="result-area" aria-live="polite" aria-labelledby="result-heading" data-testid="prediction-result">
                 <div className="result-topline">
                   <div className="result-title" id="result-heading">{result.home} vs {result.away}</div>
-                  <div className="result-demo">Illustration · not a forecast</div>
+                  <div className="result-demo">{formatSeason(result.season)} data · estimate</div>
                 </div>
                 <div className="probability-list">
                   {['Home win', 'Draw', 'Away win'].map((label, index) => (
@@ -270,7 +306,7 @@ function MatchPredictor() {
                     </div>
                   ))}
                 </div>
-                <p className="result-note">Illustrative percentages only. Each click uses a simple demo formula with small variation, not a trained model or live football data.</p>
+                <p className="result-note">Based on historical {formatSeason(result.season)} data. These probabilities are estimates, not guaranteed results.</p>
               </section>
             )}
           </section>
@@ -282,12 +318,14 @@ function MatchPredictor() {
                 <span data-testid="prediction-count">{predictions.length} TOTAL</span>
               </div>
               <div className="recent-list" data-testid="recent-predictions-list">
-                {predictions.map((prediction, index) => <PredictionCard key={`${prediction.home}-${prediction.away}-${index}`} prediction={prediction} index={index} />)}
+                {predictions.length === 0
+                  ? <p className="recent-date">Predictions you make will appear here.</p>
+                  : predictions.map((prediction, index) => <PredictionCard key={`${prediction.home}-${prediction.away}-${index}`} prediction={prediction} index={index} />)}
               </div>
             </section>
             <section className="method-panel" aria-label="About these predictions" data-testid="demo-disclaimer">
               <div className="method-title"><Activity aria-hidden="true" /> A note on the numbers</div>
-              <p>Every percentage here is a demo illustration for exploring matchups. Nothing is trained, live, or intended as betting advice.</p>
+              <p>Predictions use historical 2023–24 data. They are estimates and are not guaranteed results.</p>
             </section>
           </aside>
         </div>
